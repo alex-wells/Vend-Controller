@@ -1,0 +1,435 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<model version="3.3.0">
+ <documentation>Model for implementing a new Vending Machine Controller for Nottingham Hackspace</documentation>
+ <framework name="qpcpp"/>
+ <package name="Events" stereotype="0x01">
+  <class name="KeyEvent" superclass="qpcpp::QEvt">
+   <documentation>Defines a message for indicating what key has been pressed</documentation>
+   <attribute name="Value" type="char" visibility="0x00" properties="0x00">
+    <documentation>Holds the keypress value</documentation>
+   </attribute>
+  </class>
+  <class name="CoinEvent" superclass="qpcpp::QEvt">
+   <documentation>Defines a message for indicating what value coin has been inserted</documentation>
+   <attribute name="Value" type="int16_t" visibility="0x00" properties="0x00">
+    <documentation>Amount deposited into the Coin Mechanism</documentation>
+   </attribute>
+  </class>
+  <class name="PriceEvent" superclass="qpcpp::QEvt">
+   <documentation>Enacpsulates the cost of an item when there is a need to send this to other AOs - this might be to the changer to give apropriate change, the cashless device to check balances or the display to show how much an item costs</documentation>
+   <attribute name="Value" type="int16_t" visibility="0x00" properties="0x00"/>
+  </class>
+ </package>
+ <package name="AOs" stereotype="0x02">
+  <class name="MDB" superclass="qpcpp::QMActive">
+   <documentation>Test active object</documentation>
+   <operation name="MDB" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;MDB::initial))
+
+// body</code>
+   </operation>
+  </class>
+  <class name="Keypad" superclass="qpcpp::QMActive">
+   <documentation>Manages interaction with the vending machine's keypad</documentation>
+   <attribute name="m_pollTimeoutEvt" type="QP::QTimeEvt" visibility="0x02" properties="0x00">
+    <documentation>periodic expiration to allow detection of keypresses</documentation>
+   </attribute>
+   <attribute name="m_lastState" type="uint8_t" visibility="0x00" properties="0x00">
+    <documentation>Holds on to the last value read from the keypad so we can determine if there has been a change</documentation>
+   </attribute>
+   <operation name="Keypad" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;Keypad::initial)),
+         m_pollTimeoutEvt(this, TIMEOUT_SIG)
+
+// body</code>
+   </operation>
+   <statechart>
+    <initial target="../1">
+     <initial_glyph conn="3,3,4,3,5,8">
+      <action box="0,-2,10,2"/>
+     </initial_glyph>
+    </initial>
+    <state name="Run">
+     <documentation>Performs the main polling of the kepad to detect key presss and releases, generating KEY_PRESSED events for the rest of the system. Also monitors the coin-return button for cancellation of vend, which generates a VEND_CANCELLED event</documentation>
+     <entry>// initialise ports for reading keypad:
+bsp_keypadInit();
+
+// set initial value from the keypad:
+m_lastState = 0;
+
+// arm polling timer; continuous polling
+m_pollTimeoutEvt-&gt;armX(KEYPAD_POLL_TIMEOUT,
+                       KEYPAD_POLL_TIMEOUT);
+
+</entry>
+     <tran trig="TIMEOUT">
+      <action>// read the current state of the keypad
+uint8_t newState = bsp_keypadRead();
+
+// does the current state match the previous state?
+if (newState != m_lastState) {
+  // something changed; what?
+  if (newState != 0) {
+    // a key was pressed. Map it to a char and send
+    // the event
+    KeyEvent* ke = Q_NEW(KeyEvent, KEY_PRESSED_SIG);
+    ke-&gt;Value = keyMap[newState];
+    QF::PUBLISH(ke, me);
+  }
+
+  // preserve the new state:
+  m_lastState = newState;
+}</action>
+      <tran_glyph conn="11,14,3,-1,18">
+       <action box="0,-2,10,2"/>
+      </tran_glyph>
+     </tran>
+     <state_glyph node="11,6,32,25">
+      <entry box="1,2,6,2"/>
+     </state_glyph>
+    </state>
+    <state_diagram size="80,50"/>
+   </statechart>
+  </class>
+  <class name="Display" superclass="qpcpp::QMActive">
+   <attribute name="m_scrollTickEvt" type="QP::QTimeEvt" visibility="0x02" properties="0x00">
+    <documentation>Time event that triggers the scrolling of any message that is longer than the display can show in one go.
+
+Armed regardless of how long the message is; this provides consistent behaviour independant of the message used.</documentation>
+   </attribute>
+   <attribute name="m_timeoutEvt" type="QP::QTimeEvt" visibility="0x02" properties="0x00">
+    <documentation>Armed when we've got a partial vend selection.</documentation>
+   </attribute>
+   <attribute name="m_balance" type="uint16_t" visibility="0x02" properties="0x00">
+    <documentation>Tracks the amount of cash that has been entered into the machine. Gets reset to zero on successful vend, or if the cancel button is pressed</documentation>
+   </attribute>
+   <attribute name="m_vendSelection[3]" type="char" visibility="0x02" properties="0x00">
+    <documentation>Holds the vend selection so we can display it to the user</documentation>
+   </attribute>
+   <attribute name="m_displayMessage" type="char*" visibility="0x02" properties="0x00">
+    <documentation>Holds the full message we'll show to the user</documentation>
+   </attribute>
+   <attribute name="m_vendIdx" type="uint8_t" visibility="0x02" properties="0x00">
+    <documentation>Tracks which keypress we're recording</documentation>
+   </attribute>
+   <attribute name="m_displayPos" type="uint16_t" visibility="0x02" properties="0x00">
+    <documentation>Holds the current offset used in the display scrolling</documentation>
+   </attribute>
+   <operation name="Display" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;Display::initial)),
+      m_scrollTickEvt(this, SCROLL_TICK_SIG),
+      m_timeoutEvt(this, TIMEOUT_SIG)
+
+// body</code>
+   </operation>
+   <statechart>
+    <initial target="../1">
+     <action brief="Startup"/>
+     <initial_glyph conn="3,3,4,3,5,3">
+      <action box="0,-2,10,2"/>
+     </initial_glyph>
+    </initial>
+    <state name="Run">
+     <documentation>Sets up the display and subscribes to our external events</documentation>
+     <entry brief="Initialise">// initialise the display
+bsp_DisplayInit();
+
+// subscribe to published messages, currently
+// * VEND_CANCELLED
+// * VEND_SUCCESS
+// * COIN_DEPOSIT
+// * KEY_PRESSED
+// * INSUFFICENT_FUNDS
+me-&gt;subscribe(VEND_CANCELLED_SIG);
+me-&gt;subscribe(VEND_SUCCESS_SIG);
+me-&gt;subscribe(COIN_DEPOSIT_SIG);
+me-&gt;subscribe(KEY_PRESSED_SIG);
+me-&gt;subscribe(INSUFFICIENT_FUNDS_SIG);
+</entry>
+     <initial target="../6">
+      <initial_glyph conn="8,12,5,3,13">
+       <action box="0,-2,10,2"/>
+      </initial_glyph>
+     </initial>
+     <tran trig="VEND_CANCELED" target="../6">
+      <tran_glyph conn="6,16,3,3,13,-4,2">
+       <action box="0,-2,12,2"/>
+      </tran_glyph>
+     </tran>
+     <tran trig="VEND_SUCCESS" target="../6">
+      <tran_glyph conn="6,20,3,3,13,-8,2">
+       <action box="0,-2,12,2"/>
+      </tran_glyph>
+     </tran>
+     <tran trig="KEY_PRESSED" target="../8">
+      <action>// store the current vend selection
+m_vendSelection[m_vendIdx++] = e-&gt;Value;</action>
+      <tran_glyph conn="6,24,3,3,15">
+       <action box="0,-2,10,2"/>
+      </tran_glyph>
+     </tran>
+     <tran trig="COIN_DEPOSIT" target="../7">
+      <action>// increment current balance by the
+// value of the coin
+m_balance += e-&gt;Value;</action>
+      <tran_glyph conn="6,36,3,3,15">
+       <action box="0,-2,10,2"/>
+      </tran_glyph>
+     </tran>
+     <tran trig="PRICE" target="../9">
+      <tran_glyph conn="6,48,3,3,15">
+       <action box="0,-2,14,2"/>
+      </tran_glyph>
+     </tran>
+     <state name="Idle">
+      <documentation>Shows the scrolling message when nothing else is happening</documentation>
+      <entry>// set initial values
+m_balance = 0;
+memset(m_vendSelection, 0, sizeof(m_vendSelection));
+m_vendIdx = 0;
+m_displayPos = 0;
+
+// show the initial message
+bsp_displayWrite(&quot;Starting...&quot;);
+
+// arm scroll timer
+m_scrollTickEvt-&gt;armX(MESSAGE_SCROLL_PERIOD, // initial timeout
+                      MESSAGE_SCROLL_PERIOD  // repeat period
+                     );</entry>
+      <exit>// disarm scroll timer
+m_scrollTickEvt-&gt;disarm();</exit>
+      <tran trig="SCROLL_TICK">
+       <action>char *p;
+
+// update display with new message part
+// is the message longer than the display will show?
+if (strlen(m_displayMessage) &gt; DISPLAY_WIDTH) {
+  p = (char*)(m_displayMessage + m_displayPos);
+  m_displayPos++;
+
+  // wrap the index if we can fit the remainder of
+  // the message on the display - change this logic 
+  // if you want the message to scroll off entirely, bounce back
+  // and forth, etc.
+  if ((strlen(m_displayMessage) - m_displayPos) &gt;= DISPLAY_WIDTH) {
+    m_displayPos = 0;
+  }
+}
+else {
+  p = m_displayMessage;
+}
+
+// write to the display
+bsp_displayWrite(p);</action>
+       <tran_glyph conn="21,18,3,-1,13">
+        <action box="0,-2,10,2"/>
+       </tran_glyph>
+      </tran>
+      <state_glyph node="21,10,24,10">
+       <entry box="1,2,6,2"/>
+       <exit box="1,4,6,2"/>
+      </state_glyph>
+     </state>
+     <state name="ShowCash">
+      <documentation>Displays the current balance</documentation>
+      <entry>// show the current balance
+bsp_DisplayBalance(m_balance);
+
+// reset the vend selection:
+memset(m_vendSelection, 0, sizeof(m_vendSelection));
+m_vendIdx = 0;</entry>
+      <state_glyph node="21,34,24,10">
+       <entry box="1,2,6,2"/>
+      </state_glyph>
+     </state>
+     <state name="ShowSelection">
+      <documentation>Displays the current selection</documentation>
+      <entry>// Show the current vend selection
+bsp_DisplaySelection(m_vendSelection);
+
+// arm inactivity timeout - one-shot, not repeating
+m_timeoutEvt-&gt;armX(SELECTION_TIMEOUT_PERIOD);</entry>
+      <exit>// disarm timer
+m_timeoutEvt-&gt;disarm();</exit>
+      <tran trig="TIMEOUT">
+       <choice target="../../../7">
+        <guard brief="Balance &gt; 0">m_balance &gt; 0</guard>
+        <choice_glyph conn="33,30,5,3,14,3,-28,3,2">
+         <action box="2,-2,10,2"/>
+        </choice_glyph>
+       </choice>
+       <choice target="../../../6">
+        <guard brief="Balance == 0">m_balance == 0</guard>
+        <choice_glyph conn="33,30,4,3,-2,16,-19,-30,3,2">
+         <action box="2,-4,10,2"/>
+        </choice_glyph>
+       </choice>
+       <tran_glyph conn="21,30,3,-1,12">
+        <action box="0,-2,10,2"/>
+       </tran_glyph>
+      </tran>
+      <state_glyph node="21,22,24,10">
+       <entry box="1,2,6,2"/>
+       <exit box="1,4,6,2"/>
+      </state_glyph>
+     </state>
+     <state name="ShowItemPrice">
+      <documentation>Invoked if there is insufficient funds for a vend to complete</documentation>
+      <entry>// show the amount needed for this item
+bsp_displayPrice(e-&gt;Value);
+
+// arm the clearance timer
+m_timeoutEvt-&gt;armX(ITEM_PRICE_TIMEOUT);</entry>
+      <exit>// disarm the clearance timer
+m_timeoutEvt-&gt;disarm();</exit>
+      <tran trig="TIMEOUT">
+       <choice target="../../../7">
+        <guard brief="Balance &gt; 0">m_balance &gt; 0</guard>
+        <choice_glyph conn="33,54,4,3,-2,14,-7,-28,-9,2">
+         <action box="1,-4,10,2"/>
+        </choice_glyph>
+       </choice>
+       <choice target="../../../6">
+        <guard brief="Balance == 0">m_balance == 0</guard>
+        <choice_glyph conn="33,54,5,3,16,-45,-30,3,2">
+         <action box="1,-2,10,2"/>
+        </choice_glyph>
+       </choice>
+       <tran_glyph conn="21,54,3,-1,12">
+        <action box="0,-2,10,2"/>
+       </tran_glyph>
+      </tran>
+      <state_glyph node="21,46,24,10">
+       <entry box="1,2,6,2"/>
+       <exit box="1,4,6,2"/>
+      </state_glyph>
+     </state>
+     <state_glyph node="6,6,54,54">
+      <entry box="1,2,10,2"/>
+     </state_glyph>
+    </state>
+    <state_diagram size="66,66"/>
+   </statechart>
+  </class>
+  <class name="Shelf" superclass="qpcpp::QMActive">
+   <documentation>Implements the shelf controller, responsible for dispensing an item once successfully sold.
+
+Also maintins the stock levels for each of the items in the vending machine, and can be queried to determine current levels of items.
+
+Optionally: can be extended to generate a 'low stock' message when a certain number of vends from an item have been completed.</documentation>
+   <operation name="Shelf" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;Shelf::initial))
+
+// body</code>
+   </operation>
+  </class>
+  <class name="CoinMech" superclass="qpcpp::QMActive">
+   <documentation>Implements the logic for managing the coin mechanism state.</documentation>
+   <operation name="CoinMech" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;CoinMech::initial))
+
+// body</code>
+   </operation>
+  </class>
+  <class name="CashlessDevice" superclass="qpcpp::QMActive">
+   <documentation>Implements the logic for managing the state of the Cashless Device</documentation>
+   <operation name="CashlessDevice" type="" visibility="0x00" properties="0x00">
+    <documentation>constructor</documentation>
+    <code>  : QMActive(Q_STATE_CAST(&amp;CashlessDevice::initial))
+
+// body</code>
+   </operation>
+  </class>
+ </package>
+ <directory name="src">
+  <directory name="bsp">
+   <directory name="arduino"/>
+   <directory name="win32"/>
+   <file name="bsp.h"/>
+  </directory>
+  <file name="project.h">
+   <text>#ifndef Project_H
+#define Project_H
+
+#include &quot;qp_port.h&quot;
+
+#include &quot;bsp/bsp.h&quot;
+
+// define all the signals used
+enum VendSignals {
+  VEND_CANCELLED_SIG = Q_USER_SIG,  /* published by Keypad whenever the
+                                       coin-return button is pressed */
+  VEND_SUCCESS_SIG,                 /* published by Shelf whenever a vend
+                                       completes successfully */
+  KEY_PRESSED_SIG,                  /* published by Keypad whenever a
+                                       selection button is pressed */
+  COIN_DEPOIST_SIG,                 /* published by CoinMech and
+                                       CashlessDevice when credit is added */
+  PRICE_SIG,                        /* published by Shelf when a selection is
+                                       made, but there is insufficinet credit
+                                       to complete the vend */
+  MAX_PUB_SIG,
+
+  TIMEOUT_SIG                       /* used internally by several AOs for
+                                       their own local timeouts */
+};
+
+/* define some other functions */
+
+#endif // Project_H</text>
+  </file>
+  <file name="AO_Display.cpp">
+   <text>#include &quot;qp_port.h&quot;
+#include &quot;AO_Display.h&quot;
+
+// definition of the Display Active Object
+$define(AOs::Display)</text>
+  </file>
+  <file name="AO_Display.h">
+   <text>#ifndef AO_Display_H
+#define AO_Display_H
+
+#include &quot;qp_port.h&quot;
+#include &quot;project.h&quot;
+
+// declaration of the Display Active Object
+$declare(AOs::Display)
+
+#endif // AO_Display_H
+</text>
+  </file>
+  <file name="AO_Keypad.cpp">
+   <text>#include &quot;qp_port.h&quot;
+
+#include &quot;AO_Keypad.h&quot;
+
+// define the keymap
+char keyMap[MAX_KEYS] = {
+  '\0',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8' ,'9',
+  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L'
+};
+
+$define(AOs::Keypad)
+</text>
+  </file>
+  <file name="AO_Keypad.h">
+   <text>#ifndef AO_Keypad_H
+#define AO_Keypad_H
+
+#include &quot;qp_port.h&quot;
+
+#include &quot;project.h&quot;
+
+$declare(AOs::Keypad)
+
+#endif // AO_Keypad_H
+</text>
+  </file>
+ </directory>
+</model>
