@@ -82,11 +82,11 @@ if (newState != m_lastState) {
   // preserve the new state:
   m_lastState = newState;
 }</action>
-      <tran_glyph conn="11,14,3,-1,18">
+      <tran_glyph conn="11,14,3,-1,13">
        <action box="0,-2,10,2"/>
       </tran_glyph>
      </tran>
-     <state_glyph node="11,6,32,25">
+     <state_glyph node="11,6,57,40">
       <entry box="1,2,6,2"/>
      </state_glyph>
     </state>
@@ -326,6 +326,47 @@ Optionally: can be extended to generate a 'low stock' message when a certain num
 
 // body</code>
    </operation>
+   <statechart>
+    <initial target="../1">
+     <initial_glyph conn="2,3,4,3,5,4">
+      <action box="1,-3,10,2"/>
+     </initial_glyph>
+    </initial>
+    <state name="Run">
+     <documentation>Main state of the shelf controller</documentation>
+     <tran trig="STOCK_QUERY">
+      <action>// send back current stock levels for each item</action>
+      <tran_glyph conn="6,16,3,-1,10">
+       <action box="0,-2,10,2"/>
+      </tran_glyph>
+     </tran>
+     <state name="Vending">
+      <documentation>Drives the selected auger and counts pulses to determine how much of a rotation has occurred</documentation>
+      <entry brief="Begin Vend"/>
+      <state_glyph node="22,30,20,12">
+       <entry box="1,2,11,2"/>
+      </state_glyph>
+     </state>
+     <state name="Idle">
+      <tran trig="COIN_DEPOSIT">
+       <action>m_balance += e-&gt;Value;</action>
+       <tran_glyph conn="22,16,3,-1,12">
+        <action box="0,-2,10,2"/>
+       </tran_glyph>
+      </tran>
+      <tran trig="VEND_CANCELLED">
+       <action>m_balance = 0;
+memset(m_vendSelection, 0, sizeof(m_vendSelection));</action>
+       <tran_glyph conn="22,20,3,-1,12">
+        <action box="0,-2,14,2"/>
+       </tran_glyph>
+      </tran>
+      <state_glyph node="22,10,26,16"/>
+     </state>
+     <state_glyph node="6,6,68,44"/>
+    </state>
+    <state_diagram size="80,56"/>
+   </statechart>
   </class>
   <class name="CoinMech" superclass="qpcpp::QMActive">
    <documentation>Implements the logic for managing the coin mechanism state.</documentation>
@@ -348,15 +389,122 @@ Optionally: can be extended to generate a 'low stock' message when a certain num
  </package>
  <directory name="src">
   <directory name="bsp">
-   <directory name="arduino"/>
-   <directory name="win32"/>
-   <file name="bsp.h"/>
+   <directory name="arduino">
+    <file name="Keypad.cpp">
+     <text>#include &quot;project.h&quot;
+
+#if defined(TARGET) &amp;&amp; (TARGET == &quot;Arduino&quot;)
+#include &quot;../bsp.h&quot;
+
+#include &quot;Arduino.h&quot;
+
+// define the keymap
+#define ROWS    7
+#define COLS    3
+
+char _KeyMap[COLS][ROWS] = {
+    { 'A', 'B', 'C', 'D', 'E', 'F', 'J' },
+    { '1', '3', '5', '7', '9', 'G', 'K' },
+    { '2', '4', '6', '8', '0', 'H', 'L' }
+};
+
+char bsp_KeypadRead(void) {
+  // loop through the columns of the keypad
+  for (int col = 0; col &lt; COLS; col++) {
+    // write out the 'wandering zero' for this iteration:
+    PORTG &amp;= (uint8_t)(~(1&lt;&lt;col));
+
+    // read in this set of rows:
+    uint8_t row = PORTA;
+
+    uint8_t r = ffs(~row);
+
+    if (r &gt; 0) {
+      return _Keyap[col][r-1];
+    }
+  }
+
+  // no key pressed; give a null back:
+  return '\0';
+}
+
+void bsp_KeypadInit(void) {
+  // set PORTG&lt;0:2&gt; as outputs
+  DDRG |= B00000111;    // don't disturb any other pin settings
+  PORTG |= B00000111;   // set PORTG&lt;0:2&gt; High
+
+  // set PORTA as inputs
+  DDRA &amp;= B00000000;    // entire port is set as inputs
+}
+
+#endif // TARGET_ARDUINO</text>
+    </file>
+   </directory>
+   <directory name="win32">
+    <file name="Keypad.cpp">
+     <text>#include &quot;project.h&quot;
+
+#if defined(TARGET) &amp;&amp; (TARGET == &quot;Win32&quot;)
+#include &quot;../bsp.h&quot;
+
+#include &lt;stdio.h&gt;
+
+char _allowedKeys[] = &quot;0123456789ABCDEFGHJKL&quot;;
+
+char bsp_KeypadRead(void) {
+  if (kbhit()) {
+    char c = toupper(getch());
+
+    if (strchr(_allowedKeys, c)) {
+      // found it:
+      return c;
+    }
+  }
+
+  // no key waiting
+  return '\0';
+}
+
+void bsp_KeypadInit(void) {
+  // nothing to do here
+}
+
+#endif // TARGET_ARDUINO</text>
+    </file>
+   </directory>
+   <file name="bsp.h">
+    <text>#ifndef BSP_H
+#define BSP_H
+
+#include &quot;qp_port.h&quot;
+
+#include &quot;project.h&quot;
+
+// General BSP
+void bsp_Init(void);
+
+
+// Keypad BSP
+void bsp_keypadInit(void);
+char bsp_keypadRead(void);
+
+// Display BSP
+
+// Shelf BSP
+
+// MDB BSP
+
+#endif // BSP_H</text>
+   </file>
   </directory>
   <file name="project.h">
    <text>#ifndef Project_H
 #define Project_H
 
 #include &quot;qp_port.h&quot;
+
+// set the target; current values are &quot;Arduino&quot; and &quot;Win32&quot;
+#define TARGET &quot;Arduino&quot;
 
 #include &quot;bsp/bsp.h&quot;
 
@@ -408,13 +556,6 @@ $declare(AOs::Display)
 
 #include &quot;AO_Keypad.h&quot;
 
-// define the keymap
-char keyMap[MAX_KEYS] = {
-  '\0',
-  '0', '1', '2', '3', '4', '5', '6', '7', '8' ,'9',
-  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L'
-};
-
 $define(AOs::Keypad)
 </text>
   </file>
@@ -429,6 +570,42 @@ $define(AOs::Keypad)
 $declare(AOs::Keypad)
 
 #endif // AO_Keypad_H
+</text>
+  </file>
+  <file name="AO_Shelf.cpp">
+   <text>#include &quot;qp_port.h&quot;
+
+#include &quot;AO_Shelf.h&quot;
+
+struct shelf_item shelves[MAX_SHELVES][MAX_ITEMS_PER_SHELF];
+
+$define(AOs::Shelf)
+</text>
+  </file>
+  <file name="AO_Shelf.h">
+   <text>#ifndef AO_Shelf_H
+#define AO_Shelf_H
+
+#include &quot;qp_port.h&quot;
+
+#include &quot;project.h&quot;
+
+struct shelf_item {
+  uint8_t   max_stock;
+  uint8_t   cur_stock;
+  int16_t   price;
+//  char      description[32];
+};
+
+#define MAX_SHELVES            8    // we only use 6 shelves in the current snackspace machine
+#define MAX_ITEMS_PER_SHELF    10   // we only have up to 8 items per shelf
+
+const char _shelves[] = &quot;ABCDEFGH&quot;;
+const char _slots[]   = &quot;1234567890&quot;;
+
+$declare(AOs::Shelf)
+
+#endif // AO_Shelf_H
 </text>
   </file>
  </directory>
